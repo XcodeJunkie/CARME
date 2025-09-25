@@ -1,5 +1,5 @@
 ************************************************************************
-* TITLE          : Report /BMW/GCC_A5212_SEND_VIN_R
+* TITLE          : Report Z_SEND_VIN_R
 * AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
 * DATE           : 23.09.2022
 * DEVELOPMENT ID : FIT-A 5212
@@ -28,13 +28,13 @@
 * - Log creation is now processtype-dependent moved to the
 *   function module /BMW/GCC_A5212_SETUP_LOG_INST
 *-----------------------------------------------------------------------
-REPORT /bmw/gcc_a5212_send_vin_r NO STANDARD PAGE HEADING.
+REPORT z_send_vin_r NO STANDARD PAGE HEADING.
 
-INCLUDE: /bmw/gcc_a5212_send_vin_top,
-         /bmw/gcc_a5212_send_vin_sel,
-         /bmw/gcc_a5212_send_vin_cd1,
-         /bmw/gcc_a5212_send_vin_ci1,
-         /bmw/gcc_a5212_send_vin_f01.
+INCLUDE: z_send_vin_top,
+         z_send_vin_sel,
+         z_send_vin_cd1,
+         z_send_vin_ci1,
+         z_send_vin_f01.
 
 *--------------------------------------------------------------------*
 * START-OF-SELECTION
