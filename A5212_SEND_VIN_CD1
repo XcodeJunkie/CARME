@@ -1,0 +1,113 @@
+************************************************************************
+* TITLE          : Include /BMW/GCC_A5212_SEND_VIN_CD1
+* AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
+* DATE           : 28.10.2022
+* DEVELOPMENT ID : FIT-A-5212
+* CHANGE REQUEST : CUSTOMSGTS-26133
+* DESCRIPTION    :
+* Local class declarations
+************************************************************************
+* CHANGE HISTORY LOG
+*-----------------------------------------------------------------------
+* MOD. NO. | DATE       | NAME    | TR NUMBER  | CHANGE REFERENCE
+*-----------------------------------------------------------------------
+* MOD-0001 | 17.08.2023 | QXZ16R0 | GTDK930057 | CUSTOMSGTS-35799
+* - The JSON which is sent to CARME is now built dynamically upon the
+*   process type. The following changes have been made for this:
+*   - New abstract base class GCL_EXEC_PROD_ABSTR, which handles the
+*     basic CARME connection tasks
+*   - New prod classes GCL_EXEC_PROD_OPR and GCL_EXEC_PROD_WUP for
+*     sending VINs for the O&P and OPR process types
+*   - The established CARME connection will now be reused for each
+*     VIN which is to be sent to CARME, rather then to decomission
+*     it after each VIN and reopen it again
+* - Use date field in the CARME sending report instead of timestamp
+*-----------------------------------------------------------------------
+* MOD-0002 | 13.05.2025 | QXZ16R0 | GTDK936659 | CUSTOMSGTS-43024
+* - Code retirement: Decommission outdated coding and move commonly
+*   used objects into the global package 5200.
+* - Replace local by global objects where possible
+*-----------------------------------------------------------------------
+* MOD-0003 | 13.05.2025 | QXZ16R0 | GTDK936659 | CUSTOMSGTS-63795
+* Restructure of the exception classes.
+*-----------------------------------------------------------------------
+
+INTERFACE gif_execution .
+  INTERFACES:
+    /bmw/gcc_a5200_if_msg_sender.
+
+  METHODS:
+    process_data
+      IMPORTING
+        is_crit TYPE /bmw/gcc_a5200_carme_crit_s
+      RAISING                                                                                       " MOD-0001
+        cx_sy_open_sql_db ,                                                                         " MOD-0001
+
+    finalize
+      IMPORTING
+        ir_slg1_model TYPE REF TO /bmw/gcc_a5200_if_save.
+
+ENDINTERFACE.
+
+CLASS gcl_exec_test DEFINITION.
+  PUBLIC SECTION.
+    INTERFACES:
+      gif_execution.
+
+    CLASS-METHODS:
+      class_constructor.
+
+
+  PROTECTED SECTION.
+    CLASS-DATA: ss_debug TYPE /sapsll/debug_s.
+
+    DATA: mt_carme       TYPE /bmw/gcc_a5200_carme_t.
+
+    " MOD-0001 begin
+    METHODS:
+      process_record
+        IMPORTING
+          ir_carme TYPE REF TO /bmw/gcc_carme
+        RAISING
+          cx_sy_open_sql_db.
+    " MOD-0001 end
+ENDCLASS.
+
+" MOD-0001 begin
+CLASS gcl_exec_prod_abstr DEFINITION INHERITING FROM gcl_exec_test ABSTRACT.
+  PUBLIC SECTION.
+    METHODS:
+      gif_execution~finalize REDEFINITION.
+
+    METHODS:
+      constructor
+        IMPORTING
+          iv_procty TYPE /bmw/gcc_a5200_carme_procty
+        RAISING
+          /bmw/cx_gcc_s5212_general.
+
+  PROTECTED SECTION .
+
+    DATA: mr_carme_http TYPE REF TO /bmw/gcc_a5200_cl_http_carme.                                   " MOD-0002
+
+    METHODS:
+      process_record REDEFINITION ,
+
+      send_data ABSTRACT
+        CHANGING cs_carme TYPE /bmw/gcc_carme
+        RAISING  /bmw/cx_gcc_a5200_global .                                                         " MOD-0003
+
+ENDCLASS.
+
+CLASS gcl_exec_prod_wup DEFINITION INHERITING FROM gcl_exec_prod_abstr FINAL.
+  PROTECTED SECTION .
+    METHODS:
+      send_data REDEFINITION .
+ENDCLASS.
+
+CLASS gcl_exec_prod_opr DEFINITION INHERITING FROM gcl_exec_prod_abstr FINAL.
+  PROTECTED SECTION .
+    METHODS:
+      send_data REDEFINITION .
+ENDCLASS.
+" MOD-0001 end
