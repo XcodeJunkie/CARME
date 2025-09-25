@@ -1,0 +1,199 @@
+************************************************************************
+* TITLE          : Include /BMW/GCC_A5212_SEND_VIN_F01
+* AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
+* DATE           : 28.10.2022
+* DEVELOPMENT ID : FIT-A-5212
+* CHANGE REQUEST : CUSTOMSGTS-26133
+* DESCRIPTION    :
+* Form routines for report /BMW/GCC_A5212_SEND_VIN_R
+* Select entries from /BMW/GCC_INVOIHD and send new VINs to CARME
+************************************************************************
+* CHANGE HISTORY LOG
+*-----------------------------------------------------------------------
+* MOD. NO. | DATE       | NAME    | TR NUMBER  | CHANGE REFERENCE
+*-----------------------------------------------------------------------
+* MOD-0001 | 17.08.2023 | QXZ16R0 | GTDK930057 | CUSTOMSGTS-35799
+* - The JSON which is sent to CARME is now built dynamically upon the
+*   process type. The following changes have been made for this:
+*   - New abstract base class GCL_EXEC_PROD_ABSTR, which handles the
+*     basic CARME connection tasks
+*   - New prod classes GCL_EXEC_PROD_OPR and GCL_EXEC_PROD_WUP for
+*     sending VINs for the O&P and OPR process types
+*   - The established CARME connection will now be reused for each
+*     VIN which is to be sent to CARME, rather then to decomission
+*     it after each VIN and reopen it again
+* - Use date field in the CARME sending report instead of timestamp
+* - Derive the SLG1 subobject out from the process type
+* - Log creation is now processtype-dependent moved to the
+*   function module /BMW/GCC_A5212_SETUP_LOG_INST
+*-----------------------------------------------------------------------
+
+*&---------------------------------------------------------------------*
+*&      Form  START
+*&---------------------------------------------------------------------*
+*       Main routine for sending VCINs to CARME
+*----------------------------------------------------------------------*
+*  -->  IV_SIMULATION:   Flag: Simulation mode
+*  -->  IT_VIDNO:        Range table of VIN numbers (opt.)
+*  -->  IT_CRDAT:        Creation Date
+*  -->  IV_PROCTY:       CARME Process type
+*----------------------------------------------------------------------*
+FORM start USING iv_simulation TYPE abap_bool
+                 it_vidno      TYPE /sapsll/vidno_r_t
+                 it_crdat      TYPE /sapsll/crdat_r_t                                               " MOD-0001
+                 iv_procty     TYPE /bmw/gcc_a5200_carme_procty.
+
+  " Local declarations
+  DATA: lr_exec     TYPE REF TO gif_execution,
+        lr_slg1_log TYPE REF TO /bmw/gcc_a5200_cl_msg_bal,
+        lr_disp_log TYPE REF TO /bmw/gcc_a5200_cl_msg_bal,
+        ls_crit     TYPE /bmw/gcc_a5200_carme_crit_s.
+
+  TRY.
+      " Create execution type instance: Simulation/productive mode
+      PERFORM setup_execution_controller USING    iv_simulation
+                                                  iv_procty
+                                         CHANGING lr_exec.
+
+      " Prepare the selection criteria to select all unprocessed records from table /BMW/GCC_CARME
+      " and trigger the transfer to CARME for them
+      PERFORM setup_crit USING    it_vidno
+                                  it_crdat                  "MOD-0001
+                                  iv_procty
+                         CHANGING ls_crit.
+
+      " Setup the log handler instance
+      PERFORM setup_log_handler USING    lr_exec
+                                         iv_procty                                                  " MOD-0001
+                                CHANGING lr_slg1_log
+                                         lr_disp_log.
+
+      " Start the entire send process
+      lr_exec->process_data( ls_crit ).
+
+      " Finalize: Update table /BMW/GCC_CARME and persistently store the SLG1 log
+      lr_exec->finalize( lr_slg1_log ).
+
+      " Display the SLG1 log as result of the report run
+      lr_disp_log->display( ).
+
+      " These exceptions must be investigated and therefore lead to a cancelled background job
+    CATCH cx_sy_open_sql_db
+          cx_dest_http_abap_special
+          /bmw/cx_gcc_s5212_general
+          /bmw/cx_gcc_a5200_global INTO DATA(lr_x_err).
+      MESSAGE lr_x_err TYPE /bmw/gcc_a5200_if_const=>gc_msgty-error.
+
+  ENDTRY.
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  SETUP_CRIT
+*&---------------------------------------------------------------------*
+*       Setup the selection criteria structure
+*----------------------------------------------------------------------*
+*  -->  IT_VIDNO:        Range table of VIN numbers (opt.)
+*  -->  IT_CRDAT:        Creation Date
+*  -->  IV_PROCTY:       CARME Process type
+*  <--  CS_CRIT:         The selection criteria structure
+*----------------------------------------------------------------------*
+FORM setup_crit USING    it_vidno  TYPE /sapsll/vidno_r_t
+                         it_crdat  TYPE /sapsll/crdat_r_t   "MOD-0001
+                         iv_procty TYPE /bmw/gcc_a5200_carme_procty
+                CHANGING cs_crit   TYPE /bmw/gcc_a5200_carme_crit_s.
+  " MOD-0001 begin
+  DATA(lt_crtsp) = VALUE /sapsll/crtsp_r_t( FOR ls_crdat IN it_crdat (
+    sign   = ls_crdat-sign
+    option = SWITCH #( ls_crdat-option
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-equal     THEN /bmw/gcc_a5200_if_const=>gc_range-option-between
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-not_equal THEN /bmw/gcc_a5200_if_const=>gc_range-option-not_between
+                       ELSE ls_crdat-option )
+    low    = /bmw/gcc_a5200_cl_value_helper=>convert_date_to_timestamp( iv_date = ls_crdat-low
+                                                                        iv_time = /bmw/gcc_a5200_if_const=>gc_time-alpha )
+    high   = SWITCH #( ls_crdat-option
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-less_than     THEN space
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-less_equal    THEN space
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-greater_than  THEN space
+                       WHEN /bmw/gcc_a5200_if_const=>gc_range-option-greater_equal THEN space
+                       ELSE /bmw/gcc_a5200_cl_value_helper=>convert_date_to_timestamp( iv_date = COND #( WHEN ls_crdat-high IS INITIAL THEN ls_crdat-low ELSE ls_crdat-high )
+                                                                                       iv_time = /bmw/gcc_a5200_if_const=>gc_time-omega ) )
+  ) ).
+  "MOD-0001 end
+
+  cs_crit = VALUE #(
+    procty = VALUE #( ( sign   = /bmw/gcc_a5200_if_const=>gc_range-sign-including
+                        option = /bmw/gcc_a5200_if_const=>gc_range-option-equal
+                        low    = iv_procty ) )
+    vidno = it_vidno
+    crtsp = lt_crtsp                                                                                " MOD-0001
+    acsta = VALUE #(
+      sign   = /bmw/gcc_a5200_if_const=>gc_range-sign-including
+      option = /bmw/gcc_a5200_if_const=>gc_range-option-equal
+      ( low = /bmw/gcc_a5200_if_const=>gc_carme-status-open )
+      ( low = /bmw/gcc_a5200_if_const=>gc_carme-status-req_in_process )
+    )
+  ).
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  SETUP_EXECUTION_CONTROLLER
+*&---------------------------------------------------------------------*
+*       Setup the execution controller instance according to
+*       simulation flag
+*
+*       Simulation = true  --> Test
+*       Simulation = false --> Prod
+*----------------------------------------------------------------------*
+*  -->  IV_SIMULATION:   Simulation Flag
+*  -->  IV_PROCTY:       CARME Process type
+*  <--  CR_EXEC:         Execution Controller instance
+*----------------------------------------------------------------------*
+FORM setup_execution_controller USING    iv_simulation TYPE abap_bool
+                                         iv_procty     TYPE /bmw/gcc_a5200_carme_procty
+                                CHANGING cr_exec       TYPE REF TO gif_execution
+                                RAISING  /bmw/cx_gcc_s5212_general.
+
+  " MOD-0001 begin
+  cr_exec = SWITCH #( iv_simulation
+    WHEN abap_true THEN NEW gcl_exec_test( )
+    ELSE SWITCH #( iv_procty
+      WHEN /bmw/gcc_a5200_if_const=>gc_carme-processtype-vehicle_bom_opr THEN NEW gcl_exec_prod_opr( iv_procty )
+      WHEN /bmw/gcc_a5200_if_const=>gc_carme-processtype-vehicle_bom_op  THEN NEW gcl_exec_prod_wup( iv_procty )
+      WHEN /bmw/gcc_a5200_if_const=>gc_carme-processtype-vehicle_bom_ipr THEN NEW gcl_exec_prod_wup( iv_procty )
+      ELSE THROW /bmw/cx_gcc_s5212_general( textid    = /bmw/cx_gcc_s5212_general=>gc_unsupported_processtype
+                                            mv_procty = iv_procty )
+  ) ).
+  " MOD-0001 end
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  SETUP_LOG_HANDLER
+*&---------------------------------------------------------------------*
+*       Setup the logging object
+*----------------------------------------------------------------------*
+*  -->  IR_EXEC:         The execution instance, which produces messages
+*  -->  IV_PROCTY:       CARME Process type
+*  <--  CR_SLG1_LOG:     The log handler instance, which will
+*                        be saved to the database in productive mode
+*  <--  CR_DISP_LOG:     The log handler instance, which will
+*                        display the occured messages during runtime
+*----------------------------------------------------------------------*
+FORM setup_log_handler USING    ir_exec     TYPE REF TO gif_execution
+                                iv_procty   TYPE /bmw/gcc_a5200_carme_procty                        " MOD-0001
+                       CHANGING cr_slg1_log TYPE REF TO /bmw/gcc_a5200_cl_msg_bal
+                                cr_disp_log TYPE REF TO /bmw/gcc_a5200_cl_msg_bal
+                       RAISING  /bmw/cx_gcc_s5212_general                                           " MOD-0001
+                                /bmw/cx_gcc_a5200_global.
+
+  CALL FUNCTION '/BMW/GCC_A5212_SETUP_LOG_INST'
+    EXPORTING
+      ir_msg_sender = ir_exec
+      iv_procty     = iv_procty                                                                     " MOD-0001
+    IMPORTING
+      er_slg1_log   = cr_slg1_log
+      er_disp_log   = cr_disp_log.
+
+ENDFORM.
