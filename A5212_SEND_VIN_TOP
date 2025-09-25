@@ -1,0 +1,29 @@
+************************************************************************
+* TITLE          : Include /BMW/GCC_A5212_SEND_VIN_TOP
+* AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
+* DATE           : 28.10.2022
+* DEVELOPMENT ID : FIT-A-5212
+* CHANGE REQUEST : CUSTOMSGTS-26133
+* DESCRIPTION    :
+* TOP Include for report /BMW/GCC_A5212_SEND_VIN_R
+* Contains global used variables
+************************************************************************
+* CHANGE HISTORY LOG
+*-----------------------------------------------------------------------
+* MOD. NO. | DATE       | NAME    | TR NUMBER  | CHANGE REFERENCE
+*-----------------------------------------------------------------------
+* MOD-0001 | 17.08.2023 | QXZ16R0 | GTDK930057 | CUSTOMSGTS-35799
+* - The JSON which is sent to CARME is now built dynamically upon the
+*   process type. The following changes have been made for this:
+*   - New abstract base class GCL_EXEC_PROD_ABSTR, which handles the
+*     basic CARME connection tasks
+*   - New prod classes GCL_EXEC_PROD_OPR and GCL_EXEC_PROD_WUP for
+*     sending VINs for the O&P and OPR process types
+*   - The established CARME connection will now be reused for each
+*     VIN which is to be sent to CARME, rather then to decomission
+*     it after each VIN and reopen it again
+* - Use date field in the CARME sending report instead of timestamp
+*-----------------------------------------------------------------------
+
+TABLES: /bmw/gcc_carme.
+DATA: gv_crdat type /sapsll/crdat.                                                                  " MOD-0001
