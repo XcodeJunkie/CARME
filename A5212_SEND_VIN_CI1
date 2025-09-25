@@ -1,0 +1,228 @@
+************************************************************************
+* TITLE          : Include /BMW/GCC_A5212_SEND_VIN_CI1
+* AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
+* DATE           : 28.10.2022
+* DEVELOPMENT ID : FIT-A-5212
+* CHANGE REQUEST : CUSTOMSGTS-26133
+* DESCRIPTION    :
+* Local class implementations
+************************************************************************
+* CHANGE HISTORY LOG
+*-----------------------------------------------------------------------
+* MOD. NO. | DATE       | NAME    | TR NUMBER  | CHANGE REFERENCE
+*-----------------------------------------------------------------------
+* MOD-0001 | 17.08.2023 | QXZ16R0 | GTDK930057 | CUSTOMSGTS-35799
+* - The JSON which is sent to CARME is now built dynamically upon the
+*   process type. The following changes have been made for this:
+*   - New abstract base class GCL_EXEC_PROD_ABSTR, which handles the
+*     basic CARME connection tasks
+*   - New prod classes GCL_EXEC_PROD_OPR and GCL_EXEC_PROD_WUP for
+*     sending VINs for the O&P and OPR process types
+*   - The established CARME connection will now be reused for each
+*     VIN which is to be sent to CARME, rather then to decomission
+*     it after each VIN and reopen it again
+* - Use date field in the CARME sending report instead of timestamp
+*-----------------------------------------------------------------------
+* MOD-0002 | 13.05.2025 | QXZ16R0 | GTDK936659 | CUSTOMSGTS-43024
+* - Code retirement: Decommission outdated coding and move commonly
+*   used objects into the global package 5200.
+* - Replace local by global objects where possible
+*-----------------------------------------------------------------------
+* MOD-0003 | 13.05.2025 | QXZ16R0 | GTDK936659 | CUSTOMSGTS-63795
+* Restructure of the exception classes.
+*-----------------------------------------------------------------------
+
+CLASS gcl_exec_test IMPLEMENTATION.
+  METHOD class_constructor.
+    ss_debug = VALUE #( ).
+  ENDMETHOD.
+
+  METHOD gif_execution~process_data.
+
+    " Local declarations
+    DATA lv_dummy TYPE string ##NEEDED.
+
+    " Perform the database selection
+    CALL FUNCTION '/BMW/GCC_A5200_CARME_DB_RNG_RD'
+      EXPORTING
+        is_crit        = is_crit
+        is_debug       = ss_debug
+      IMPORTING
+        et_result      = mt_carme
+      EXCEPTIONS
+        no_data        = 1
+        open_sql_error = 2
+        OTHERS         = 3.
+    IF sy-subrc = 0.
+      LOOP AT mt_carme REFERENCE INTO DATA(lr_carme).
+        process_record( lr_carme ).
+      ENDLOOP.
+
+    ELSE.
+      MESSAGE i035(d4) WITH '/BMW/GCC_CARME' INTO lv_dummy." No records found in table &
+      RAISE EVENT /bmw/gcc_a5200_if_msg_sender~message_occured.
+
+    ENDIF.
+
+  ENDMETHOD.
+
+  " MOD-0001 begin
+  METHOD process_record ##NEEDED.
+
+    " Local declarations
+    DATA: lv_dummy TYPE string ##NEEDED.
+
+    " The VIN &1 has been sent to the CARME Server.
+    MESSAGE s001(/bmw/gcc_s5212) WITH ir_carme->vidno
+                                 INTO lv_dummy.
+
+    RAISE EVENT /bmw/gcc_a5200_if_msg_sender~message_occured.
+  ENDMETHOD.
+  " MOD-0001 end
+
+  METHOD gif_execution~finalize.
+    MESSAGE s020(/bmw/gcc_a5200) INTO sy-msgli. " Report has finished in simulation mode.
+    RAISE EVENT /bmw/gcc_a5200_if_msg_sender~message_occured EXPORTING es_syst = syst.
+  ENDMETHOD.
+ENDCLASS.
+
+
+" MOD-0001 begin
+CLASS gcl_exec_prod_abstr IMPLEMENTATION.
+  METHOD constructor.
+
+    super->constructor( ).
+
+    " MOD-0002 begin
+    TRY.
+        mr_carme_http = NEW /bmw/gcc_a5200_cl_http_carme( iv_procty ).
+
+      CATCH /bmw/cx_gcc_a5200_global.
+        RAISE EXCEPTION TYPE /bmw/cx_gcc_s5212_general
+          EXPORTING
+            textid    = /bmw/cx_gcc_s5212_general=>gc_unsupported_processtype
+            mv_procty = iv_procty.
+    ENDTRY.
+    " MOD-0002 end
+
+  ENDMETHOD.
+
+  METHOD process_record.
+
+    " Local declarations
+    DATA: lv_dummy TYPE string ##NEEDED.
+
+    " Send VIN to CARME
+    TRY.
+        send_data( CHANGING cs_carme = ir_carme->* ).                                               " MOD-0003
+
+        " Update SLG1 Log
+        IF ir_carme->acsta = /bmw/gcc_a5200_if_const=>gc_carme-status-cpl_wait_response.
+          " The VIN &1 has been sent to the CARME Server.
+          MESSAGE s001(/bmw/gcc_s5212) WITH ir_carme->vidno
+                                       INTO lv_dummy.
+
+        ELSEIF ir_carme->http-http_code NE /bmw/gcc_a5200_if_const=>gc_http-status-ok.
+          " The Server replied with Status &1: &2 for VIN &3.
+          MESSAGE e002(/bmw/gcc_s5212) WITH ir_carme->http-http_code
+                                            ir_carme->http-http_text
+                                            ir_carme->vidno
+                                       INTO lv_dummy.
+        ELSE.
+          " General issue occured for VIN &1: Record has status &2.
+          MESSAGE e000(/bmw/gcc_s5212) WITH ir_carme->vidno
+                                            ir_carme->acsta
+                                       INTO lv_dummy.
+
+        ENDIF.
+        RAISE EVENT /bmw/gcc_a5200_if_msg_sender~message_occured.
+
+      CATCH /bmw/cx_gcc_a5200_global INTO DATA(lr_x_global).                                        " MOD-0003
+        RAISE EVENT /bmw/gcc_a5200_if_msg_sender~exception_occured EXPORTING er_exc = lr_x_global.  " MOD-0003
+
+    ENDTRY.
+
+    " Update CARME entry
+    ir_carme->aenam = sy-uname.
+    ir_carme->chtsp = /bmw/gcc_a5200_cl_value_helper=>timestamp_now( ).
+
+    " Since this VIN has been processed, we immediately update the status on the database
+    CALL FUNCTION '/BMW/GCC_A5200_CARME_DB_WRITE'
+      EXPORTING
+        it_upd              = VALUE /bmw/gcc_a5200_carme_t( ( ir_carme->* ) )
+        iv_flag_update_task = abap_false
+        is_debug            = ss_debug
+      EXCEPTIONS
+        update_failed       = 1
+        OTHERS              = 2.
+    IF sy-subrc = 0.
+      COMMIT WORK.
+
+    ELSE.
+      RAISE EXCEPTION TYPE cx_sy_open_sql_db
+        EXPORTING
+          textid = cx_sy_open_sql_db=>cx_sy_sql_error.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD gif_execution~finalize.
+
+    " Close the HTTP connection to CARME
+    mr_carme_http->close( ).
+
+    ir_slg1_model->save( abap_true ).
+
+    COMMIT WORK.
+
+    MESSAGE s021(/bmw/gcc_a5200) INTO sy-msgli. " Report has finished in productive mode.
+    RAISE EVENT /bmw/gcc_a5200_if_msg_sender~message_occured EXPORTING es_syst = syst.
+  ENDMETHOD.
+ENDCLASS.
+
+
+CLASS gcl_exec_prod_wup IMPLEMENTATION.
+  " MOD-0002 begin
+  METHOD send_data.
+    " Local type declaration, needed for the JSON encoding of the VIN
+    TYPES:
+      BEGIN OF ts_vin,
+        procty TYPE /bmw/gcc_a5200_carme_procty,
+        vin    TYPE /sapsll/vidno,
+      END OF ts_vin .
+
+    DATA(ls_vin) = VALUE ts_vin(
+      procty = cs_carme-procty
+      vin    = cs_carme-vidno
+    ).
+
+    mr_carme_http->send_data(
+      EXPORTING iv_data      = ls_vin
+      IMPORTING ev_acsta     = cs_carme-acsta
+                es_http_info = cs_carme-http ).
+  ENDMETHOD.
+  " MOD-0002 end
+ENDCLASS.
+
+
+CLASS gcl_exec_prod_opr IMPLEMENTATION.
+  " MOD-0002 begin
+  METHOD send_data.
+    " Local type declaration, needed for the JSON encoding of the VIN
+    TYPES:
+      BEGIN OF ts_vin,
+        procty TYPE /bmw/gcc_a5200_carme_procty,
+        vin    TYPE /sapsll/vidno,
+        ecpid  TYPE /sapsll/ecpid,
+      END OF ts_vin .
+
+    DATA(ls_vin) = CORRESPONDING ts_vin( cs_carme MAPPING vin = vidno ).
+
+    mr_carme_http->send_data(
+      EXPORTING iv_data      = ls_vin
+      IMPORTING ev_acsta     = cs_carme-acsta
+                es_http_info = cs_carme-http ).
+  ENDMETHOD.
+  " MOD-0002 end
+ENDCLASS.
+" MOD-0001 end
