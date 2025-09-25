@@ -1,0 +1,46 @@
+************************************************************************
+* TITLE          : Report /BMW/GCC_A5212_SEND_VIN_R
+* AUTHOR         : Olaf Steinicke, ascilium GmbH (QXZ16R0)
+* DATE           : 23.09.2022
+* DEVELOPMENT ID : FIT-A 5212
+* CHANGE REQUEST : CUSTOMSGTS-26133
+* DESCRIPTION    :
+* Report to process all unprocessed VIN numbers out from table
+* /BMW/GCC_CARME to CARME via the REST interface.
+* After successful sending process, the status of the CARME record
+* gets updated to COMPLETED.
+************************************************************************
+* CHANGE HISTORY LOG
+*-----------------------------------------------------------------------
+* MOD. NO. | DATE       | NAME    | TR NUMBER  | CHANGE REFERENCE
+*-----------------------------------------------------------------------
+* MOD-0001 | 17.08.2023 | QXZ16R0 | GTDK930057 | CUSTOMSGTS-35799
+* - The JSON which is sent to CARME is now built dynamically upon the
+*   process type. The following changes have been made for this:
+*   - New abstract base class GCL_EXEC_PROD_ABSTR, which handles the
+*     basic CARME connection tasks
+*   - New prod classes GCL_EXEC_PROD_OPR and GCL_EXEC_PROD_WUP for
+*     sending VINs for the O&P and OPR process types
+*   - The established CARME connection will now be reused for each
+*     VIN which is to be sent to CARME, rather then to decomission
+*     it after each VIN and reopen it again
+* - Use date field in the CARME sending report instead of timestamp
+* - Log creation is now processtype-dependent moved to the
+*   function module /BMW/GCC_A5212_SETUP_LOG_INST
+*-----------------------------------------------------------------------
+REPORT /bmw/gcc_a5212_send_vin_r NO STANDARD PAGE HEADING.
+
+INCLUDE: /bmw/gcc_a5212_send_vin_top,
+         /bmw/gcc_a5212_send_vin_sel,
+         /bmw/gcc_a5212_send_vin_cd1,
+         /bmw/gcc_a5212_send_vin_ci1,
+         /bmw/gcc_a5212_send_vin_f01.
+
+*--------------------------------------------------------------------*
+* START-OF-SELECTION
+*--------------------------------------------------------------------*
+START-OF-SELECTION.
+  PERFORM start USING p_simu
+                      s_vidno[]
+                      s_crdat[]
+                      p_procty.
